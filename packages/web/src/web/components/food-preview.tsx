@@ -1,11 +1,13 @@
 import { RvIcon } from "./rv-icons";
 import { AnimatePresence, motion } from "motion/react";
-import { type Answers, foodInput, planFor } from "../lib/quiz-data";
-import { STORES, fmtEur } from "../lib/food-data";
+import { type Answers, foodInput } from "../lib/quiz-data";
+import { STORES, fmtEur } from "../lib/food-ui";
+import { usePlan } from "../queries/plan";
 
 export function FoodPreview({ answers }: { answers: Answers }) {
   const f = foodInput(answers);
-  const plan = planFor(answers);
+  const { data: plan } = usePlan(answers);
+  if (!plan) return null;
   const store = STORES.find((s) => s.id === f.store)?.label;
   const over = plan.total > f.budget + 0.5;
 
