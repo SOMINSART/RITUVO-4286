@@ -1,4 +1,4 @@
-import { buildPlan, suggestedBudget, type Diet, type FoodInput } from "./food-data";
+import { suggestedBudget, type Diet, type FoodInput } from "./food-ui";
 
 export type Option = { id: string; icon: string; label: string; hint?: string };
 export type Preview = "routine" | "food";
@@ -230,5 +230,3 @@ export function foodInput(a: Answers): FoodInput {
     dislikes: a.dislikes ?? [],
   };
 }
-
-export const planFor = (a: Answers) => buildPlan(foodInput(a));

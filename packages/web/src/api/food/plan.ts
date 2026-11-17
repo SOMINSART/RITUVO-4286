@@ -1,3 +1,5 @@
+// Server-only: recipe catalogue and plan computation. Never import from the web bundle.
+import { storeIndex, portionsPerMeal, type Diet, type FoodInput } from "../../web/lib/food-ui";
 // Food module: ingredient catalog, recipes and the weekly budget planner.
 // Prices are rough French supermarket estimates (€ / kg) — tune them as needed.
 
@@ -51,7 +53,6 @@ export const ING: Record<string, Ing> = {
   tofu: { name: "Tofu ferme", cat: "Crèmerie & œufs", perKg: 8.5 },
 };
 
-export type Diet = "all" | "flexi" | "veggie" | "vegan" | "pesco" | "nopork";
 export type Recipe = {
   id: string;
   name: string;
@@ -115,25 +116,7 @@ export const RECIPES: Recipe[] = [
     items: [["boeufHache", 100], ["pommesTerre", 250], ["lait", 60], ["fromage", 20], ["oignon", 30]] },
 ];
 
-export const STORES = [
-  { id: "lidl", label: "Lidl", index: 0.86 },
-  { id: "aldi", label: "Aldi", index: 0.86 },
-  { id: "leclerc", label: "E.Leclerc", index: 0.92 },
-  { id: "intermarche", label: "Intermarché", index: 0.97 },
-  { id: "auchan", label: "Auchan", index: 0.96 },
-  { id: "carrefour", label: "Carrefour", index: 1.0 },
-  { id: "superu", label: "Super U", index: 0.98 },
-  { id: "monoprix", label: "Monoprix", index: 1.18 },
-  { id: "bio", label: "Bio / marché", index: 1.32 },
-];
-
 export const PANTRY_PER_PORTION = 0.15; // huile, épices, sel, bouillon…
-
-export const storeIndex = (id?: string) => STORES.find((s) => s.id === id)?.index ?? 1;
-
-export function portionsPerMeal(adults: number, kids: number) {
-  return adults + kids * 0.5;
-}
 
 export function recipeCost(r: Recipe, idx: number) {
   const raw = r.items.reduce((s, [k, g]) => s + (ING[k].perKg * g) / 1000, 0);
@@ -149,21 +132,12 @@ const DIET_OK: Record<Diet, Recipe["kind"][]> = {
   nopork: ["meat", "fish", "veggie", "vegan"],
 };
 
-export type FoodInput = {
-  adults: number;
-  kids: number;
-  dinners: number;
-  budget: number; // € per week for dinners
-  store?: string;
-  diet?: Diet;
-  allergies: string[];
-  dislikes: string[];
-};
-
 export type PlannedMeal = { day: string; recipe: Recipe; perPortion: number; total: number };
 
 export type Plan = {
-  meals: PlannedMeal[];
+  meals: PlannedMeal[]; // visible days only
+  dinners: number; // all planned dinners, visible or not
+  lockedCount: number; // planned dinners hidden behind the unlock
   total: number;
   perPortion: number;
   portions: number;
@@ -185,7 +159,7 @@ export function compatibleRecipes(f: FoodInput) {
   );
 }
 
-export function buildPlan(f: FoodInput): Plan {
+export function buildPlan(f: FoodInput, visibleDays?: number): Plan {
   const idx = storeIndex(f.store);
   const portions = portionsPerMeal(f.adults, f.kids);
   const pool = compatibleRecipes(f).map((r) => ({ r, c: recipeCost(r, idx) }));
@@ -242,9 +216,12 @@ export function buildPlan(f: FoodInput): Plan {
   const total = meals.reduce((s, m) => s + m.total, 0);
   const minPossible = pool.slice(0, n).reduce((s, x) => s + x.c, 0) * portions;
 
+  // Only the free days are returned in full; the shopping list covers those days only.
+  const visible = visibleDays === undefined ? meals : meals.slice(0, visibleDays);
+
   // Shopping list
   const agg = new Map<string, number>();
-  for (const m of meals) for (const [k, g] of m.recipe.items) agg.set(k, (agg.get(k) ?? 0) + g * portions);
+  for (const m of visible) for (const [k, g] of m.recipe.items) agg.set(k, (agg.get(k) ?? 0) + g * portions);
   const cats: Cat[] = ["Fruits & légumes", "Viandes & poissons", "Crèmerie & œufs", "Épicerie"];
   const shopping = cats
     .map((cat) => ({
@@ -257,7 +234,9 @@ export function buildPlan(f: FoodInput): Plan {
     .filter((c) => c.lines.length);
 
   return {
-    meals,
+    meals: visible,
+    dinners: meals.length,
+    lockedCount: meals.length - visible.length,
     total,
     perPortion: meals.length ? total / (portions * meals.length) : 0,
     portions,
@@ -266,19 +245,4 @@ export function buildPlan(f: FoodInput): Plan {
     pool: pool.length,
     shopping,
   };
-}
-
-export function fmtEur(v: number, digits = 2) {
-  return v.toLocaleString("fr-FR", { style: "currency", currency: "EUR", minimumFractionDigits: digits, maximumFractionDigits: digits });
-}
-
-export function fmtQty(g: number) {
-  if (g >= 1000) return `${(g / 1000).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} kg`;
-  return `${Math.round(g / 10) * 10} g`;
-}
-
-/** Suggested weekly budget for the household (≈ 3,20 € / portion at the chosen store). */
-export function suggestedBudget(adults: number, kids: number, dinners: number, store?: string) {
-  const v = portionsPerMeal(adults, kids) * dinners * 3.2 * storeIndex(store);
-  return Math.max(15, Math.round(v / 5) * 5);
 }

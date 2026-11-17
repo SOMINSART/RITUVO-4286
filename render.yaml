@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: rituvo
+    runtime: node
+    buildCommand: curl -fsSL https://bun.sh/install | bash && export PATH="$HOME/.bun/bin:$PATH" && bun install && cd packages/web && bunx vite build
+    startCommand: export PATH="$HOME/.bun/bin:$PATH" && bun packages/web/src/__server.ts
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_AUTH_TOKEN
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: UNLOCK_SECRET
+        generateValue: true
+      - key: WEBSITE_URL
+        sync: false

@@ -1,15 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { RvIcon, RvMark, UiIcon } from "../components/rv-icons";
-import { DEFAULT_ANSWERS, STEPS, fmtTime, foodInput, pickHabits, planFor, type Answers, type Option, type Step } from "../lib/quiz-data";
+import { DEFAULT_ANSWERS, STEPS, fmtTime, foodInput, pickHabits, type Answers, type Option, type Step } from "../lib/quiz-data";
 import { PhonePreview } from "../components/phone-preview";
 import { FoodPreview } from "../components/food-preview";
-import { STORES, fmtEur, fmtQty, suggestedBudget } from "../lib/food-data";
+import { STORES, fmtEur, fmtQty, suggestedBudget } from "../lib/food-ui";
 import { useSubmitQuiz } from "../queries/quiz";
+import { usePlan } from "../queries/plan";
+import { completeUnlockFromUrl, startUnlockCheckout } from "../queries/checkout";
 
 const QUESTION_STEPS = STEPS.filter((s) => s.kind !== "loading" && s.kind !== "result").length;
 
 export default function Index() {
+  useEffect(() => {
+    // Back from Stripe: verify the payment, then reload so the plan query picks up the unlock.
+    completeUnlockFromUrl()
+      .then((unlocked) => {
+        if (unlocked) window.location.reload();
+      })
+      .catch(() => {});
+  }, []);
   const [i, setI] = useState(() => {
     const v = Number(localStorage.getItem("rituvo:step") ?? 0);
     return Number.isFinite(v) && v >= 0 && v < STEPS.length ? v : 0;
@@ -421,8 +431,6 @@ function StepBody({
     const v = a.budgetTouched && a.budget ? a.budget : suggested;
     const pct = ((v - min) / (max - min)) * 100;
     const perPortion = v / Math.max(1, f.dinners * (f.adults + f.kids * 0.5));
-    const plan = planFor({ ...a, budget: v });
-    const tight = plan.minPossible > v;
     const tag = perPortion < 2 ? "Petit budget 🪙" : perPortion < 3.5 ? "Malin 👌" : perPortion < 5 ? "Confort 😋" : "Large 🍾";
     return (
       <>
@@ -451,15 +459,7 @@ function StepBody({
             <span>{fmtEur(max, 0)}</span>
           </div>
         </div>
-        {tight ? (
-          <p className="mt-4 rounded-2xl bg-[#FFEDD5] px-4 py-3 text-[13.5px] text-[#9A3412]">
-            ⚠️ Minimum possible avec tes critères : {fmtEur(plan.minPossible, 0)}. On fera au plus serré.
-          </p>
-        ) : (
-          <p className="mt-4 rounded-2xl bg-[var(--cream)] px-4 py-3 text-[13.5px] text-[var(--ink)]/80">
-            💡 Ton menu estimé : {fmtEur(plan.total, 0)} — il te reste {fmtEur(v - plan.total, 0)} de marge.
-          </p>
-        )}
+        <BudgetHint answers={a} budget={v} />
         <PrimaryButton onClick={() => (setA2(set, v), next())}>Continuer</PrimaryButton>
       </>
     );
@@ -551,7 +551,7 @@ function Proof({ onNext }: { onNext: () => void }) {
 function Loading({ answers, onDone }: { answers: Answers; onDone: () => void }) {
   const lines = useMemo(
     () => [
-      `Tri des recettes compatibles (${planFor(answers).pool})`,
+      "Tri des recettes compatibles avec toi",
       `Calcul des prix ${STORES.find((x) => x.id === answers.store)?.label ?? "magasin"}`,
       `Menu de ${answers.dinners ?? 5} dîners dans ${fmtEur(foodInput(answers).budget, 0)}`,
       `Routine calée sur ${fmtTime(answers.wake ?? 420)}`,
@@ -610,18 +610,36 @@ function Loading({ answers, onDone }: { answers: Answers; onDone: () => void }) 
   );
 }
 
+/** Budget hint under the slider, computed on the server for the chosen budget. */
+function BudgetHint({ answers, budget }: { answers: Answers; budget: number }) {
+  const { data: plan } = usePlan({ ...answers, budget });
+  if (!plan) return null;
+  return plan.minPossible > budget ? (
+    <p className="mt-4 rounded-2xl bg-[#FFEDD5] px-4 py-3 text-[13.5px] text-[#9A3412]">
+      ⚠️ Minimum possible avec tes critères : {fmtEur(plan.minPossible, 0)}. On fera au plus serré.
+    </p>
+  ) : (
+    <p className="mt-4 rounded-2xl bg-[var(--cream)] px-4 py-3 text-[13.5px] text-[var(--ink)]/80">
+      💡 Ton menu estimé : {fmtEur(plan.total, 0)} — il te reste {fmtEur(budget - plan.total, 0)} de marge.
+    </p>
+  );
+}
+
 function Result({ answers, onRestart }: { answers: Answers; onRestart: () => void }) {
   const [email, setEmail] = useState("");
   const [tab, setTab] = useState<"menu" | "courses" | "routine">("menu");
   const [checked, setChecked] = useState<Record<string, boolean>>({});
+  const [unlocking, setUnlocking] = useState(false);
+  const [unlockError, setUnlockError] = useState(false);
   const submit = useSubmitQuiz();
   const habits = pickHabits(answers);
-  const plan = useMemo(() => planFor(answers), [answers]);
+  const { data: plan } = usePlan(answers);
   const f = foodInput(answers);
   const valid = /^\S+@\S+\.\S+$/.test(email);
   const first = answers.name?.trim();
+  if (!plan) return <div className="pt-10 text-sm text-[var(--mute)]">Calcul de ton plan…</div>;
   const over = plan.total > f.budget + 0.5;
-  const saved = Math.max(0, plan.meals.length * plan.portions * 4.6 - plan.total); // vs ~4,60 €/portion en "improvisé"
+  const saved = Math.max(0, plan.dinners * plan.portions * 4.6 - plan.total); // vs ~4,60 €/portion en "improvisé"
   let t = answers.wake ?? 420;
   const per = Math.max(2, Math.round(20 / Math.max(1, habits.length)));
 
@@ -640,7 +658,7 @@ function Result({ answers, onRestart }: { answers: Answers; onRestart: () => voi
           </span>
           <h1 className="font-display mt-4 text-[38px] font-extrabold leading-[1.02] md:text-[54px]">
             {first ? `${first}, ` : ""}
-            {plan.meals.length} dîners pour
+            {plan.dinners} dîners pour
             <br />
             <span className="text-[var(--go-deep)]">{fmtEur(plan.total, 0)}</span> cette semaine.
           </h1>
@@ -698,6 +716,31 @@ function Result({ answers, onRestart }: { answers: Answers; onRestart: () => voi
                     <span className="font-display text-lg font-extrabold tabular-nums">{fmtEur(m.total)}</span>
                   </motion.li>
                 ))}
+                {plan.lockedCount > 0 && (
+                  <li className="rounded-2xl border-[1.5px] border-dashed border-[var(--ink)]/20 p-4 text-sm text-[var(--mute)]">
+                    <span className="block">
+                      Les jours suivants : {plan.lockedCount} dîner{plan.lockedCount > 1 ? "s" : ""} à débloquer.
+                    </span>
+                    <button
+                      type="button"
+                      disabled={unlocking}
+                      onClick={async () => {
+                        setUnlocking(true);
+                        setUnlockError(false);
+                        try {
+                          await startUnlockCheckout();
+                        } catch {
+                          setUnlockError(true);
+                          setUnlocking(false);
+                        }
+                      }}
+                      className="mt-3 rounded-full bg-[var(--ink)] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+                    >
+                      {unlocking ? "Redirection vers le paiement…" : "Débloquer pour 3,90 €"}
+                    </button>
+                    {unlockError && <span className="mt-2 block text-red-600">Paiement indisponible pour l'instant, réessaie dans un instant.</span>}
+                  </li>
+                )}
               </ol>
             )}
 
